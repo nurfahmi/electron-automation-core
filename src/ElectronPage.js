@@ -5,7 +5,7 @@ const Mouse = require('./Mouse');
 const Keyboard = require('./Keyboard');
 const Network = require('./Network');
 const Waiter = require('./Waiter');
-const { sleep, safeDetachDebugger } = require('./utils');
+const { sleep, safeDetachDebugger, safeAttachDebugger, cdpSend } = require('./utils');
 
 const DISABLE_ANIMATIONS_CSS = `
 *, *::before, *::after {
@@ -143,6 +143,134 @@ class ElectronPage {
 
   async waitForTimeout(ms) {
     return sleep(ms);
+  }
+
+  // --- Element Query ---
+
+  /**
+   * Query single element by CSS selector. Returns serializable properties.
+   */
+  async querySelector(selector) {
+    const escaped = selector.replace(/'/g, "\\'");
+    return this._wc.executeJavaScript(`
+      (function() {
+        var el = document.querySelector('${escaped}');
+        if (!el) return null;
+        var r = el.getBoundingClientRect();
+        return {
+          tagName: el.tagName, id: el.id, className: el.className,
+          textContent: el.textContent.substring(0, 500),
+          innerText: (el.innerText || '').substring(0, 500),
+          value: el.value || null,
+          href: el.href || null,
+          src: el.src || null,
+          bounds: { x: r.x, y: r.y, width: r.width, height: r.height },
+        };
+      })()
+    `, true);
+  }
+
+  /**
+   * Query all elements by CSS selector.
+   */
+  async querySelectorAll(selector) {
+    const escaped = selector.replace(/'/g, "\\'");
+    return this._wc.executeJavaScript(`
+      (function() {
+        var els = document.querySelectorAll('${escaped}');
+        return Array.from(els).map(function(el) {
+          var r = el.getBoundingClientRect();
+          return {
+            tagName: el.tagName, id: el.id, className: el.className,
+            textContent: el.textContent.substring(0, 500),
+            value: el.value || null,
+            bounds: { x: r.x, y: r.y, width: r.width, height: r.height },
+          };
+        });
+      })()
+    `, true);
+  }
+
+  /**
+   * Get element by ID.
+   */
+  async getElementById(id) {
+    return this.querySelector(`#${id}`);
+  }
+
+  /**
+   * Get elements by class name.
+   */
+  async getElementsByClassName(className) {
+    return this.querySelectorAll(`.${className}`);
+  }
+
+  /**
+   * Get elements by tag name.
+   */
+  async getElementsByTagName(tagName) {
+    return this.querySelectorAll(tagName);
+  }
+
+  /**
+   * Query element(s) by XPath expression.
+   * Returns array of serializable element info.
+   */
+  async xpath(expression) {
+    const escaped = expression.replace(/'/g, "\\'");
+    return this._wc.executeJavaScript(`
+      (function() {
+        var result = document.evaluate('${escaped}', document, null,
+          XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+        var items = [];
+        for (var i = 0; i < result.snapshotLength; i++) {
+          var el = result.snapshotItem(i);
+          var r = el.getBoundingClientRect ? el.getBoundingClientRect() : { x:0, y:0, width:0, height:0 };
+          items.push({
+            tagName: el.tagName || null, id: el.id || null, className: el.className || null,
+            textContent: (el.textContent || '').substring(0, 500),
+            value: el.value || null,
+            bounds: { x: r.x, y: r.y, width: r.width, height: r.height },
+          });
+        }
+        return items;
+      })()
+    `, true);
+  }
+
+  /**
+   * Click element found by XPath.
+   */
+  async clickByXpath(expression) {
+    const escaped = expression.replace(/'/g, "\\'");
+    const result = await this._wc.executeJavaScript(`
+      (function() {
+        var result = document.evaluate('${escaped}', document, null,
+          XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+        var el = result.singleNodeValue;
+        if (!el) return null;
+        var r = el.getBoundingClientRect();
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+      })()
+    `, true);
+    if (!result) throw new Error(`XPath element not found: ${expression}`);
+    await this.mouse.click(Math.round(result.x), Math.round(result.y));
+  }
+
+  /**
+   * Type into element found by XPath.
+   */
+  async typeByXpath(expression, text, delay = 0) {
+    const escaped = expression.replace(/'/g, "\\'");
+    await this._wc.executeJavaScript(`
+      (function() {
+        var result = document.evaluate('${escaped}', document, null,
+          XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+        var el = result.singleNodeValue;
+        if (el) el.focus();
+      })()
+    `, true);
+    await this.keyboard.type(text, delay);
   }
 
   // --- Element interaction ---
@@ -307,6 +435,62 @@ class ElectronPage {
 
   async setExtraHTTPHeaders(headers) {
     await this.network.setExtraHTTPHeaders(headers);
+  }
+
+  /**
+   * Emulate a mobile device with touch, viewport, and UA override.
+   * @param {object} device
+   * @param {number} device.width
+   * @param {number} device.height
+   * @param {number} [device.deviceScaleFactor=2]
+   * @param {boolean} [device.mobile=true]
+   * @param {boolean} [device.hasTouch=true]
+   * @param {string} [device.userAgent]
+   */
+  async emulateDevice(device) {
+    await safeAttachDebugger(this._wc);
+    await cdpSend(this._wc, 'Emulation.setDeviceMetricsOverride', {
+      width: device.width,
+      height: device.height,
+      deviceScaleFactor: device.deviceScaleFactor || 2,
+      mobile: device.mobile !== false,
+    });
+    await cdpSend(this._wc, 'Emulation.setTouchEmulationEnabled', {
+      enabled: device.hasTouch !== false,
+    });
+    if (device.userAgent) {
+      await cdpSend(this._wc, 'Emulation.setUserAgentOverride', {
+        userAgent: device.userAgent,
+      });
+    }
+  }
+
+  /**
+   * Quick switch to mobile view with common presets.
+   * @param {string} [preset='iphone12'] - Device preset name.
+   */
+  async setMobile(preset = 'iphone12') {
+    const devices = {
+      iphone12: { width: 390, height: 844, deviceScaleFactor: 3, userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1' },
+      iphone14pro: { width: 393, height: 852, deviceScaleFactor: 3, userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1' },
+      iphoneSE: { width: 375, height: 667, deviceScaleFactor: 2, userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1' },
+      pixel7: { width: 412, height: 915, deviceScaleFactor: 2.625, userAgent: 'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36' },
+      galaxyS21: { width: 360, height: 800, deviceScaleFactor: 3, userAgent: 'Mozilla/5.0 (Linux; Android 12; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36' },
+      ipadAir: { width: 820, height: 1180, deviceScaleFactor: 2, userAgent: 'Mozilla/5.0 (iPad; CPU OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1' },
+      ipadPro: { width: 1024, height: 1366, deviceScaleFactor: 2, userAgent: 'Mozilla/5.0 (iPad; CPU OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1' },
+    };
+    const device = devices[preset];
+    if (!device) throw new Error(`Unknown device preset: ${preset}. Available: ${Object.keys(devices).join(', ')}`);
+    await this.emulateDevice(device);
+  }
+
+  /**
+   * Reset mobile emulation back to desktop.
+   */
+  async setDesktop() {
+    await safeAttachDebugger(this._wc);
+    await cdpSend(this._wc, 'Emulation.clearDeviceMetricsOverride');
+    await cdpSend(this._wc, 'Emulation.setTouchEmulationEnabled', { enabled: false });
   }
 
   // --- Lifecycle ---

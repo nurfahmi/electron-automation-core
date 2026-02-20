@@ -171,6 +171,39 @@ await page.waitForTimeout(2000)
 | `waitForFunction(fn, timeout?)` | Wait until JS function returns truthy. Pass as string: `'() => condition'` |
 | `waitForTimeout(ms)` | Simple delay |
 
+#### Element Query
+
+```js
+// CSS Selector
+const el = await page.querySelector('#myId')
+const all = await page.querySelectorAll('.items li')
+
+// By ID, Class, Tag
+const btn = await page.getElementById('submit')
+const cards = await page.getElementsByClassName('card')
+const divs = await page.getElementsByTagName('div')
+
+// XPath
+const results = await page.xpath('//div[@class="content"]/p')
+
+// Click / Type by XPath
+await page.clickByXpath('//button[text()="Login"]')
+await page.typeByXpath('//input[@name="email"]', 'test@gmail.com')
+```
+
+All query methods return serializable element info: `{ tagName, id, className, textContent, value, bounds, href, src }`
+
+| Method | Description |
+|--------|-------------|
+| `querySelector(selector)` | Get single element by CSS selector |
+| `querySelectorAll(selector)` | Get all elements by CSS selector |
+| `getElementById(id)` | Get element by ID |
+| `getElementsByClassName(className)` | Get elements by class name |
+| `getElementsByTagName(tagName)` | Get elements by tag name |
+| `xpath(expression)` | Get elements by XPath expression |
+| `clickByXpath(expression)` | Click first element matching XPath |
+| `typeByXpath(expression, text, delay?)` | Focus XPath element and type text |
+
 #### Element Interaction
 
 ```js
@@ -244,6 +277,45 @@ await page.setExtraHTTPHeaders({ 'X-Custom': 'value' })
 | `setUserAgent(ua)` | Override user agent |
 | `setViewport(width, height)` | Resize the BrowserView bounds |
 | `setExtraHTTPHeaders(headers)` | Add extra headers to all requests via CDP |
+
+#### Mobile Emulation
+
+```js
+// Quick preset — switches to mobile viewport, touch, and UA
+await page.setMobile('iphone12')
+await page.goto('https://example.com')  // site sees mobile device
+
+// Switch back to desktop
+await page.setDesktop()
+
+// Custom device
+await page.emulateDevice({
+  width: 400,
+  height: 800,
+  deviceScaleFactor: 2,
+  mobile: true,
+  hasTouch: true,
+  userAgent: 'Custom Mobile UA'
+})
+```
+
+**Available presets for `setMobile()`:**
+
+| Preset | Resolution | Device |
+|--------|-----------|--------|
+| `iphone12` | 390×844 | iPhone 12 |
+| `iphone14pro` | 393×852 | iPhone 14 Pro |
+| `iphoneSE` | 375×667 | iPhone SE |
+| `pixel7` | 412×915 | Pixel 7 |
+| `galaxyS21` | 360×800 | Galaxy S21 |
+| `ipadAir` | 820×1180 | iPad Air |
+| `ipadPro` | 1024×1366 | iPad Pro |
+
+| Method | Description |
+|--------|-------------|
+| `setMobile(preset?)` | Switch to mobile view with device preset (default: `'iphone12'`) |
+| `emulateDevice(device)` | Custom device emulation with touch, viewport, scale factor, UA |
+| `setDesktop()` | Reset emulation back to desktop mode |
 
 #### Direct Access
 
