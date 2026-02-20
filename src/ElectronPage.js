@@ -6,6 +6,7 @@ const Keyboard = require('./Keyboard');
 const Network = require('./Network');
 const Waiter = require('./Waiter');
 const { sleep, safeDetachDebugger, safeAttachDebugger, cdpSend } = require('./utils');
+const ElementHandle = require('./ElementHandle');
 
 const DISABLE_ANIMATIONS_CSS = `
 *, *::before, *::after {
@@ -33,6 +34,7 @@ class ElectronPage {
     this._waiter = new Waiter(this._wc);
 
     this._options = options;
+    this._handleCounter = 0;
 
     // Apply performance options after each navigation
     this._onFinishLoad = () => this._applyPerformanceOptions();
@@ -271,6 +273,82 @@ class ElectronPage {
       })()
     `, true);
     await this.keyboard.type(text, delay);
+  }
+
+  // --- Element Handle ($, $$, $x) ---
+
+  _nextHandleId() {
+    return `eac_${Date.now()}_${++this._handleCounter}`;
+  }
+
+  /**
+   * Select a single element by CSS selector. Returns an ElementHandle for interaction.
+   * @param {string} selector
+   * @returns {Promise<ElementHandle|null>}
+   */
+  async $(selector) {
+    const escaped = selector.replace(/'/g, "\\'");
+    const handleId = this._nextHandleId();
+    const found = await this._wc.executeJavaScript(`
+      (function() {
+        var el = document.querySelector('${escaped}');
+        if (!el) return false;
+        el.setAttribute('__eac_id', '${handleId}');
+        return true;
+      })()
+    `, true);
+    if (!found) return null;
+    return new ElementHandle(this._wc, this.mouse, this.keyboard, handleId);
+  }
+
+  /**
+   * Select all elements by CSS selector. Returns array of ElementHandles.
+   * @param {string} selector
+   * @returns {Promise<ElementHandle[]>}
+   */
+  async $$(selector) {
+    const escaped = selector.replace(/'/g, "\\'");
+    const baseId = this._nextHandleId();
+    const count = await this._wc.executeJavaScript(`
+      (function() {
+        var els = document.querySelectorAll('${escaped}');
+        for (var i = 0; i < els.length; i++) {
+          els[i].setAttribute('__eac_id', '${baseId}_' + i);
+        }
+        return els.length;
+      })()
+    `, true);
+    const handles = [];
+    for (let i = 0; i < count; i++) {
+      handles.push(new ElementHandle(this._wc, this.mouse, this.keyboard, `${baseId}_${i}`));
+    }
+    return handles;
+  }
+
+  /**
+   * Select element(s) by XPath. Returns array of ElementHandles.
+   * @param {string} expression
+   * @returns {Promise<ElementHandle[]>}
+   */
+  async $x(expression) {
+    const escaped = expression.replace(/'/g, "\\'");
+    const baseId = this._nextHandleId();
+    const count = await this._wc.executeJavaScript(`
+      (function() {
+        var result = document.evaluate('${escaped}', document, null,
+          XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+        for (var i = 0; i < result.snapshotLength; i++) {
+          var el = result.snapshotItem(i);
+          if (el.setAttribute) el.setAttribute('__eac_id', '${baseId}_' + i);
+        }
+        return result.snapshotLength;
+      })()
+    `, true);
+    const handles = [];
+    for (let i = 0; i < count; i++) {
+      handles.push(new ElementHandle(this._wc, this.mouse, this.keyboard, `${baseId}_${i}`));
+    }
+    return handles;
   }
 
   // --- Element interaction ---

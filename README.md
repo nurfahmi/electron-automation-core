@@ -204,6 +204,68 @@ All query methods return serializable element info: `{ tagName, id, className, t
 | `clickByXpath(expression)` | Click first element matching XPath |
 | `typeByXpath(expression, text, delay?)` | Focus XPath element and type text |
 
+#### Element Handle (`$`, `$$`, `$x`)
+
+Select an element first, then interact with it:
+
+```js
+// Select element, then interact
+const btn = await page.$('#submit')
+await btn.click()
+
+const input = await page.$('#email')
+await input.type('hello@test.com')
+await input.value()  // get current value
+
+// Select multiple
+const items = await page.$$('.list-item')
+for (const item of items) {
+  const text = await item.textContent()
+  console.log(text)
+}
+await items[0].click()
+
+// Select by XPath
+const [loginBtn] = await page.$x('//button[text()="Login"]')
+await loginBtn.click()
+
+// Element info & state
+const el = await page.$('.card')
+await el.hover()
+await el.scrollIntoView()
+const visible = await el.isVisible()
+const href = await el.getAttribute('href')
+await el.dispose()  // cleanup tracking attribute
+```
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `page.$(selector)` | `ElementHandle\|null` | Select single element by CSS |
+| `page.$$(selector)` | `ElementHandle[]` | Select all elements by CSS |
+| `page.$x(xpath)` | `ElementHandle[]` | Select elements by XPath |
+
+**ElementHandle methods:**
+
+| Method | Description |
+|--------|-------------|
+| `click()` | Click element (native mouse) |
+| `doubleClick()` | Double-click element |
+| `rightClick()` | Right-click element |
+| `hover()` | Hover over element |
+| `focus()` | Focus element |
+| `type(text, delay?)` | Focus and type text |
+| `select(value)` | Set select/input value |
+| `check()` / `uncheck()` | Toggle checkbox |
+| `textContent()` | Get textContent |
+| `innerText()` | Get innerText |
+| `value(newVal?)` | Get or set value |
+| `getAttribute(name)` | Get attribute |
+| `setAttribute(name, val)` | Set attribute |
+| `isVisible()` | Check visibility |
+| `scrollIntoView()` | Scroll into view |
+| `getInfo()` | Get full element info |
+| `dispose()` | Cleanup tracking |
+
 #### Element Interaction
 
 ```js

@@ -8,6 +8,7 @@ const Network = require('./src/Network');
 const Waiter = require('./src/Waiter');
 const ProfileManager = require('./src/ProfileManager');
 const GridManager = require('./src/GridManager');
+const ElementHandle = require('./src/ElementHandle');
 
 module.exports = {
   BrowserManager,
@@ -18,4 +19,5 @@ module.exports = {
   Waiter,
   ProfileManager,
   GridManager,
+  ElementHandle,
 };
