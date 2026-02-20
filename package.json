@@ -1,0 +1,21 @@
+{
+  "name": "electron-automation-core",
+  "version": "1.0.0",
+  "description": "Reusable Electron automation core module with embedded multi-browser grid and Playwright-like wrapper API",
+  "main": "index.js",
+  "license": "MIT",
+  "keywords": [
+    "electron",
+    "automation",
+    "browser",
+    "playwright",
+    "cdp",
+    "multi-profile"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "peerDependencies": {
+    "electron": ">=28.0.0"
+  }
+}
