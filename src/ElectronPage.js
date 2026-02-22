@@ -498,16 +498,41 @@ class ElectronPage {
       (function() {
         var el = document.querySelector('${escaped}');
         if (!el) return null;
-        var r = el.getBoundingClientRect();
-        return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+        el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+        return new Promise(function(resolve) {
+          requestAnimationFrame(function() {
+            requestAnimationFrame(function() {
+              var r = el.getBoundingClientRect();
+              resolve({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+            });
+          });
+        });
       })()
     `, true);
     if (!rect) throw new Error(`Element not found: ${selector}`);
     return rect;
   }
 
-  async click(selector) {
+  /**
+   * Click an element.
+   * @param {string} selector
+   * @param {object} [options]
+   * @param {boolean} [options.force=false] - Use JS click instead of native mouse (bypasses overlays).
+   * @param {number} [options.delay=0] - Delay in ms before clicking (wait for layout to settle).
+   */
+  async click(selector, options = {}) {
     await this.waitForSelector(selector, 10000);
+    if (options.force) {
+      const escaped = selector.replace(/'/g, "\\'");
+      await this._wc.executeJavaScript(`
+        (function() {
+          var el = document.querySelector('${escaped}');
+          if (el) { el.scrollIntoView({ block: 'center', behavior: 'instant' }); el.click(); }
+        })()
+      `, true);
+      return;
+    }
+    if (options.delay) await sleep(options.delay);
     const { x, y } = await this._getElementCenter(selector);
     await this.mouse.click(Math.round(x), Math.round(y));
   }
@@ -521,6 +546,23 @@ class ElectronPage {
     await this.waitForSelector(selector, 10000);
     const { x, y } = await this._getElementCenter(selector);
     await this.mouse.move(Math.round(x), Math.round(y));
+  }
+
+  /**
+   * Scroll an element into view.
+   * @param {string} selector
+   * @param {object} [options]
+   * @param {string} [options.block='center'] - 'start', 'center', 'end', 'nearest'
+   * @param {string} [options.inline='nearest'] - 'start', 'center', 'end', 'nearest'
+   */
+  async scrollIntoView(selector, options = {}) {
+    const escaped = selector.replace(/'/g, "\\'");
+    const block = options.block || 'center';
+    const inline = options.inline || 'nearest';
+    await this.waitForSelector(selector, 10000);
+    await this._wc.executeJavaScript(`
+      document.querySelector('${escaped}').scrollIntoView({ block: '${block}', inline: '${inline}', behavior: 'instant' })
+    `, true);
   }
 
   async focus(selector) {

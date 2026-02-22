@@ -323,23 +323,30 @@ await el.dispose()  // cleanup tracking attribute
 
 ```js
 await page.click('#button')
-await page.type('#input', 'hello world', 50)  // 50ms delay per char
+await page.click('#button', { force: true })   // JS click — bypasses overlays
+await page.click('#button', { delay: 200 })    // wait 200ms before clicking
+await page.type('#input', 'hello world', 50)   // 50ms delay per char
 await page.hover('.menu-item')
 await page.focus('#search')
 await page.select('#dropdown', 'option2')
 await page.check('#agree')
 await page.uncheck('#newsletter')
+await page.scrollIntoView('#target')
+await page.scrollIntoView('#target', { block: 'start' })  // scroll to top
 ```
 
 | Method | Description |
 |--------|-------------|
-| `click(selector)` | Wait for element, get center coordinates, send native mouse click |
+| `click(selector, options?)` | Scroll into view, wait for repaint, then native mouse click. Options: `{ force, delay }` |
+| `click(selector, { force: true })` | JS `el.click()` — always hits the right element even behind overlays |
+| `click(selector, { delay: 200 })` | Wait 200ms before clicking (for animations to settle) |
 | `type(selector, text, delay?)` | Focus element, type text char-by-char |
 | `hover(selector)` | Move mouse to element center |
 | `focus(selector)` | Focus element via JS |
 | `select(selector, value)` | Set select/dropdown value and dispatch change event |
 | `check(selector)` | Check a checkbox (noop if already checked) |
 | `uncheck(selector)` | Uncheck a checkbox (noop if already unchecked) |
+| `scrollIntoView(selector, options?)` | Scroll element into view. Options: `{ block: 'start'\|'center'\|'end', inline: 'start'\|'center'\|'end' }` |
 
 #### Files & Media
 
