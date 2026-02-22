@@ -1121,6 +1121,10 @@ const {
 
 ---
 
+## Developed by
+
+[indosofthouse.com](https://indosofthouse.com)
+
 ## License
 
 MIT

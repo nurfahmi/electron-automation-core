@@ -3,6 +3,8 @@
   "version": "1.0.0",
   "description": "Reusable Electron automation core module with embedded multi-browser grid and Playwright-like wrapper API",
   "main": "index.js",
+  "author": "indosofthouse.com",
+  "homepage": "https://indosofthouse.com",
   "license": "MIT",
   "keywords": [
     "electron",
