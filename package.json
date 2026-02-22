@@ -1,5 +1,5 @@
 {
-  "name": "electron-automation-core",
+  "name": "ishbrowser",
   "version": "1.0.0",
   "description": "Reusable Electron automation core module with embedded multi-browser grid and Playwright-like wrapper API",
   "main": "index.js",

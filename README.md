@@ -1,11 +1,11 @@
-# electron-automation-core
+# ISHbrowser
 
 Reusable Electron automation core module with embedded multi-browser grid and Playwright-like wrapper API.
 
 ## Installation
 
 ```bash
-npm install github:nurfahmi/electron-automation-core
+npm install github:nurfahmi/ISHbrowser
 ```
 
 ## Requirements
@@ -20,7 +20,7 @@ npm install github:nurfahmi/electron-automation-core
 
 ```js
 const { app, BrowserWindow } = require('electron')
-const { BrowserManager } = require('electron-automation-core')
+const { BrowserManager } = require('ISHbrowser')
 
 app.whenReady().then(async () => {
   const mainWindow = new BrowserWindow({ width: 1400, height: 900 })
@@ -40,7 +40,7 @@ app.whenReady().then(async () => {
 
 ```js
 const { app, BrowserWindow } = require('electron')
-const { BrowserManager } = require('electron-automation-core')
+const { BrowserManager } = require('ISHbrowser')
 
 app.whenReady().then(async () => {
   const mainWindow = new BrowserWindow({ width: 1600, height: 1000 })
@@ -107,7 +107,7 @@ You can override with `manager.grid.setGrid(cols, rows)` anytime.
 The main entry point. Receives your existing `BrowserWindow` — does NOT create its own.
 
 ```js
-const { BrowserManager } = require('electron-automation-core')
+const { BrowserManager } = require('ISHbrowser')
 const manager = new BrowserManager(mainWindow)
 ```
 
@@ -982,7 +982,7 @@ Grid auto-adjusts on window resize.
 Each profile uses `partition: persist:<profileId>` for fully isolated sessions.
 
 ```js
-const { ProfileManager } = require('electron-automation-core')
+const { ProfileManager } = require('ISHbrowser')
 
 const pm = new ProfileManager()
 const profile = pm.create('user1', { proxy: 'http://proxy:8080', userAgent: 'MyUA' })
@@ -1105,7 +1105,7 @@ const {
   ProfileManager,    // Session/partition management
   GridManager,       // Multi-view grid layout
   ElementHandle,     // Element interaction handle
-} = require('electron-automation-core')
+} = require('ISHbrowser')
 ```
 
 ---

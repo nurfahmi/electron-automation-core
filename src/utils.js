@@ -29,7 +29,7 @@ async function safeAttachDebugger(webContents, version = '1.3') {
     webContents.debugger.attach(version);
     return true;
   } catch (err) {
-    console.error('[electron-automation-core] Failed to attach debugger:', err.message);
+    console.error('[ISHbrowser] Failed to attach debugger:', err.message);
     return false;
   }
 }

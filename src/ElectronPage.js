@@ -50,7 +50,7 @@ class ElectronPage {
 
     // Handle crash
     this._onCrash = () => {
-      console.error(`[electron-automation-core] WebContents crashed for view`);
+      console.error(`[ISHbrowser] WebContents crashed for view`);
     };
     this._wc.on('render-process-gone', this._onCrash);
   }
