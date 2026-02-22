@@ -9,6 +9,9 @@ const Waiter = require('./src/Waiter');
 const ProfileManager = require('./src/ProfileManager');
 const GridManager = require('./src/GridManager');
 const ElementHandle = require('./src/ElementHandle');
+const Touch = require('./src/Touch');
+const DialogHandler = require('./src/DialogHandler');
+const DownloadManager = require('./src/DownloadManager');
 
 module.exports = {
   BrowserManager,
@@ -20,4 +23,7 @@ module.exports = {
   ProfileManager,
   GridManager,
   ElementHandle,
+  Touch,
+  DialogHandler,
+  DownloadManager,
 };

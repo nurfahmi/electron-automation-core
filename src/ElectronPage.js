@@ -5,6 +5,9 @@ const Mouse = require('./Mouse');
 const Keyboard = require('./Keyboard');
 const Network = require('./Network');
 const Waiter = require('./Waiter');
+const Touch = require('./Touch');
+const DialogHandler = require('./DialogHandler');
+const DownloadManager = require('./DownloadManager');
 const { sleep, safeDetachDebugger, safeAttachDebugger, cdpSend } = require('./utils');
 const ElementHandle = require('./ElementHandle');
 
@@ -31,10 +34,15 @@ class ElectronPage {
     this.mouse = new Mouse(this._wc);
     this.keyboard = new Keyboard(this._wc);
     this.network = new Network(this._wc);
+    this.touch = new Touch(this._wc);
+    this.dialogs = new DialogHandler(this._wc);
+    this.downloads = new DownloadManager(this._wc);
     this._waiter = new Waiter(this._wc);
 
     this._options = options;
     this._handleCounter = 0;
+    this._popupHandler = null;
+    this._onNewWindow = null;
 
     // Apply performance options after each navigation
     this._onFinishLoad = () => this._applyPerformanceOptions();
@@ -68,7 +76,9 @@ class ElectronPage {
     }
   }
 
-  // --- Navigation ---
+  // ==============================
+  // Navigation
+  // ==============================
 
   async goto(url) {
     await this._wc.loadURL(url);
@@ -76,6 +86,14 @@ class ElectronPage {
 
   async reload() {
     this._wc.reload();
+    await this.waitForNavigation();
+  }
+
+  /**
+   * Reload ignoring cache.
+   */
+  async reloadIgnoringCache() {
+    this._wc.reloadIgnoringCache();
     await this.waitForNavigation();
   }
 
@@ -90,6 +108,68 @@ class ElectronPage {
     if (this._wc.canGoForward()) {
       this._wc.goForward();
       await this.waitForNavigation();
+    }
+  }
+
+  /**
+   * Stop loading the current page.
+   */
+  stop() {
+    this._wc.stop();
+  }
+
+  /**
+   * Check if browser can navigate back.
+   */
+  canGoBack() {
+    return this._wc.canGoBack();
+  }
+
+  /**
+   * Check if browser can navigate forward.
+   */
+  canGoForward() {
+    return this._wc.canGoForward();
+  }
+
+  /**
+   * Navigate to a specific index in the navigation history.
+   */
+  async goToIndex(index) {
+    this._wc.goToIndex(index);
+    await this.waitForNavigation();
+  }
+
+  /**
+   * Get the current navigation history.
+   * @returns {{ currentIndex: number, entries: Array<{ url: string, title: string }> }}
+   */
+  getNavigationHistory() {
+    const history = this._wc.navigationHistory;
+    if (!history) {
+      // Fallback for older Electron
+      return { currentIndex: 0, entries: [{ url: this.url(), title: this.title() }] };
+    }
+    const count = history.length();
+    const entries = [];
+    for (let i = 0; i < count; i++) {
+      const entry = history.getEntryAtIndex(i);
+      entries.push({ url: entry.url, title: entry.title || '' });
+    }
+    return {
+      currentIndex: history.getActiveIndex(),
+      entries,
+    };
+  }
+
+  /**
+   * Clear navigation history.
+   */
+  clearHistory() {
+    try {
+      this._wc.clearHistory();
+    } catch {
+      // ignore — not available in all versions
     }
   }
 
@@ -129,7 +209,46 @@ class ElectronPage {
     return this._waiter.waitForNetworkIdle(timeout);
   }
 
-  // --- Evaluation ---
+  // ==============================
+  // Page Info
+  // ==============================
+
+  /**
+   * Get the current page title.
+   */
+  title() {
+    return this._wc.getTitle();
+  }
+
+  /**
+   * Get the current page URL.
+   */
+  url() {
+    return this._wc.getURL();
+  }
+
+  /**
+   * Get the full HTML source of the page.
+   */
+  async pageSource() {
+    return this._wc.executeJavaScript('document.documentElement.outerHTML', true);
+  }
+
+  /**
+   * Get the favicon URL of the current page.
+   */
+  async favicon() {
+    return this._wc.executeJavaScript(`
+      (function() {
+        var link = document.querySelector('link[rel*="icon"]');
+        return link ? link.href : null;
+      })()
+    `, true);
+  }
+
+  // ==============================
+  // Evaluation
+  // ==============================
 
   async evaluate(script) {
     return this._wc.executeJavaScript(script, true);
@@ -147,7 +266,9 @@ class ElectronPage {
     return sleep(ms);
   }
 
-  // --- Element Query ---
+  // ==============================
+  // Element Query
+  // ==============================
 
   /**
    * Query single element by CSS selector. Returns serializable properties.
@@ -212,6 +333,22 @@ class ElectronPage {
    */
   async getElementsByTagName(tagName) {
     return this.querySelectorAll(tagName);
+  }
+
+  /**
+   * Get element by name attribute.
+   */
+  async getElementByName(name) {
+    const escaped = name.replace(/'/g, "\\'");
+    return this.querySelector(`[name='${escaped}']`);
+  }
+
+  /**
+   * Get elements by name attribute.
+   */
+  async getElementsByName(name) {
+    const escaped = name.replace(/'/g, "\\'");
+    return this.querySelectorAll(`[name='${escaped}']`);
   }
 
   /**
@@ -351,7 +488,9 @@ class ElectronPage {
     return handles;
   }
 
-  // --- Element interaction ---
+  // ==============================
+  // Element interaction
+  // ==============================
 
   async _getElementCenter(selector) {
     const escaped = selector.replace(/'/g, "\\'");
@@ -425,21 +564,14 @@ class ElectronPage {
     `, true);
   }
 
-  // --- Files & Media ---
+  // ==============================
+  // Files & Media
+  // ==============================
 
   async upload(selector, filePath) {
     const escaped = selector.replace(/'/g, "\\'");
     await this.waitForSelector(selector, 10000);
-    // Use CDP to set file input
-    const { nodeId } = await this._wc.executeJavaScript(`
-      (function() {
-        var el = document.querySelector('${escaped}');
-        return { nodeId: null };
-      })()
-    `, true);
-
-    // Alternative: use webContents debugger
-    const { safeAttachDebugger, cdpSend } = require('./utils');
+    // Use webContents debugger
     await safeAttachDebugger(this._wc);
     const { root } = await cdpSend(this._wc, 'DOM.getDocument');
     const { nodeId: nId } = await cdpSend(this._wc, 'DOM.querySelector', {
@@ -450,6 +582,90 @@ class ElectronPage {
       nodeId: nId,
       files: Array.isArray(filePath) ? filePath : [filePath],
     });
+  }
+
+  /**
+   * Upload file to the Nth matching input element (0-indexed).
+   * @param {string} selector - CSS selector that matches multiple file inputs.
+   * @param {number} index - 0-based index of which matched element to target.
+   * @param {string|string[]} filePath - File path(s) to upload.
+   */
+  async uploadByIndex(selector, index, filePath) {
+    await this.waitForSelector(selector, 10000);
+    await safeAttachDebugger(this._wc);
+    const { root } = await cdpSend(this._wc, 'DOM.getDocument');
+    const { nodeIds } = await cdpSend(this._wc, 'DOM.querySelectorAll', {
+      nodeId: root.nodeId,
+      selector,
+    });
+    if (!nodeIds || index >= nodeIds.length) {
+      throw new Error(`Element at index ${index} not found for selector: ${selector} (found ${nodeIds ? nodeIds.length : 0})`);
+    }
+    await cdpSend(this._wc, 'DOM.setFileInputFiles', {
+      nodeId: nodeIds[index],
+      files: Array.isArray(filePath) ? filePath : [filePath],
+    });
+  }
+
+  /**
+   * Intercept the next file chooser dialog and auto-provide file(s).
+   * Use this when the site uses hidden/dynamic file inputs (like Facebook).
+   * 
+   * Usage:
+   *   await page.interceptFileChooser('/path/to/image.jpg');
+   *   await page.click('.upload-button'); // triggers the file dialog
+   *   // Dialog never shows — file is auto-provided
+   *
+   * @param {string|string[]} filePaths - File path(s) to provide.
+   * @param {object} [options]
+   * @param {boolean} [options.persistent=false] - Keep intercepting (for multiple uploads).
+   */
+  async interceptFileChooser(filePaths, options = {}) {
+    const files = Array.isArray(filePaths) ? filePaths : [filePaths];
+    const persistent = options.persistent || false;
+
+    await safeAttachDebugger(this._wc);
+    await cdpSend(this._wc, 'Page.enable');
+    await cdpSend(this._wc, 'Page.setInterceptFileChooserDialog', { enabled: true });
+
+    // Remove old listener if any
+    if (this._fileChooserListener) {
+      this._wc.debugger.removeListener('message', this._fileChooserListener);
+    }
+
+    this._fileChooserListener = async (_event, method, params) => {
+      if (method !== 'Page.fileChooserOpened') return;
+
+      try {
+        await cdpSend(this._wc, 'DOM.setFileInputFiles', {
+          backendNodeId: params.backendNodeId,
+          files,
+        });
+      } catch {
+        // ignore — element may have been removed
+      }
+
+      if (!persistent) {
+        this.stopInterceptFileChooser();
+      }
+    };
+
+    this._wc.debugger.on('message', this._fileChooserListener);
+  }
+
+  /**
+   * Stop intercepting file chooser dialogs.
+   */
+  async stopInterceptFileChooser() {
+    if (this._fileChooserListener) {
+      try {
+        this._wc.debugger.removeListener('message', this._fileChooserListener);
+      } catch { /* ignore */ }
+      this._fileChooserListener = null;
+    }
+    try {
+      await cdpSend(this._wc, 'Page.setInterceptFileChooserDialog', { enabled: false });
+    } catch { /* ignore */ }
   }
 
   async screenshot(options = {}) {
@@ -476,7 +692,9 @@ class ElectronPage {
     return data;
   }
 
-  // --- Cookies & Storage ---
+  // ==============================
+  // Cookies & Storage
+  // ==============================
 
   async getCookies(filter = {}) {
     return this._wc.session.cookies.get(filter);
@@ -488,6 +706,37 @@ class ElectronPage {
     }
   }
 
+  /**
+   * Set a single cookie with full attributes.
+   * @param {object} cookie
+   * @param {string} cookie.url - The URL to associate the cookie with.
+   * @param {string} cookie.name
+   * @param {string} cookie.value
+   * @param {string} [cookie.domain]
+   * @param {string} [cookie.path]
+   * @param {boolean} [cookie.secure]
+   * @param {boolean} [cookie.httpOnly]
+   * @param {string} [cookie.sameSite] - 'unspecified', 'no_restriction', 'lax', 'strict'
+   * @param {number} [cookie.expirationDate] - Unix timestamp in seconds
+   */
+  async setCookie(cookie) {
+    await this._wc.session.cookies.set(cookie);
+  }
+
+  /**
+   * Delete a specific cookie by name and url.
+   */
+  async deleteCookie(url, name) {
+    await this._wc.session.cookies.remove(url, name);
+  }
+
+  /**
+   * Flush cookies to disk.
+   */
+  async flushCookies() {
+    await this._wc.session.cookies.flushStore();
+  }
+
   async clearCookies() {
     const cookies = await this.getCookies();
     for (const cookie of cookies) {
@@ -496,7 +745,109 @@ class ElectronPage {
     }
   }
 
-  // --- Browser Emulation ---
+  // ==============================
+  // localStorage & sessionStorage
+  // ==============================
+
+  /**
+   * Get a value from localStorage.
+   */
+  async getLocalStorage(key) {
+    const escaped = key.replace(/'/g, "\\'");
+    return this._wc.executeJavaScript(`localStorage.getItem('${escaped}')`, true);
+  }
+
+  /**
+   * Set a value in localStorage.
+   */
+  async setLocalStorage(key, value) {
+    const eKey = key.replace(/'/g, "\\'");
+    const eVal = String(value).replace(/'/g, "\\'");
+    await this._wc.executeJavaScript(`localStorage.setItem('${eKey}', '${eVal}')`, true);
+  }
+
+  /**
+   * Remove a key from localStorage.
+   */
+  async removeLocalStorage(key) {
+    const escaped = key.replace(/'/g, "\\'");
+    await this._wc.executeJavaScript(`localStorage.removeItem('${escaped}')`, true);
+  }
+
+  /**
+   * Clear all localStorage.
+   */
+  async clearLocalStorage() {
+    await this._wc.executeJavaScript('localStorage.clear()', true);
+  }
+
+  /**
+   * Get all localStorage keys and values.
+   */
+  async getAllLocalStorage() {
+    return this._wc.executeJavaScript(`
+      (function() {
+        var data = {};
+        for (var i = 0; i < localStorage.length; i++) {
+          var k = localStorage.key(i);
+          data[k] = localStorage.getItem(k);
+        }
+        return data;
+      })()
+    `, true);
+  }
+
+  /**
+   * Get a value from sessionStorage.
+   */
+  async getSessionStorage(key) {
+    const escaped = key.replace(/'/g, "\\'");
+    return this._wc.executeJavaScript(`sessionStorage.getItem('${escaped}')`, true);
+  }
+
+  /**
+   * Set a value in sessionStorage.
+   */
+  async setSessionStorage(key, value) {
+    const eKey = key.replace(/'/g, "\\'");
+    const eVal = String(value).replace(/'/g, "\\'");
+    await this._wc.executeJavaScript(`sessionStorage.setItem('${eKey}', '${eVal}')`, true);
+  }
+
+  /**
+   * Remove a key from sessionStorage.
+   */
+  async removeSessionStorage(key) {
+    const escaped = key.replace(/'/g, "\\'");
+    await this._wc.executeJavaScript(`sessionStorage.removeItem('${escaped}')`, true);
+  }
+
+  /**
+   * Clear all sessionStorage.
+   */
+  async clearSessionStorage() {
+    await this._wc.executeJavaScript('sessionStorage.clear()', true);
+  }
+
+  /**
+   * Get all sessionStorage keys and values.
+   */
+  async getAllSessionStorage() {
+    return this._wc.executeJavaScript(`
+      (function() {
+        var data = {};
+        for (var i = 0; i < sessionStorage.length; i++) {
+          var k = sessionStorage.key(i);
+          data[k] = sessionStorage.getItem(k);
+        }
+        return data;
+      })()
+    `, true);
+  }
+
+  // ==============================
+  // Browser Emulation
+  // ==============================
 
   async setUserAgent(ua) {
     this._wc.setUserAgent(ua);
@@ -517,13 +868,6 @@ class ElectronPage {
 
   /**
    * Emulate a mobile device with touch, viewport, and UA override.
-   * @param {object} device
-   * @param {number} device.width
-   * @param {number} device.height
-   * @param {number} [device.deviceScaleFactor=2]
-   * @param {boolean} [device.mobile=true]
-   * @param {boolean} [device.hasTouch=true]
-   * @param {string} [device.userAgent]
    */
   async emulateDevice(device) {
     await safeAttachDebugger(this._wc);
@@ -571,7 +915,359 @@ class ElectronPage {
     await cdpSend(this._wc, 'Emulation.setTouchEmulationEnabled', { enabled: false });
   }
 
-  // --- Lifecycle ---
+  // ==============================
+  // Zoom
+  // ==============================
+
+  /**
+   * Set zoom level. 1.0 = 100%, 0.5 = 50%, 2.0 = 200%.
+   */
+  setZoom(factor) {
+    this._wc.setZoomFactor(factor);
+  }
+
+  /**
+   * Get current zoom factor.
+   */
+  getZoom() {
+    return this._wc.getZoomFactor();
+  }
+
+  /**
+   * Set zoom level (Chromium zoom level, where 0 = 100%).
+   */
+  setZoomLevel(level) {
+    this._wc.setZoomLevel(level);
+  }
+
+  /**
+   * Get current Chromium zoom level.
+   */
+  getZoomLevel() {
+    return this._wc.getZoomLevel();
+  }
+
+  // ==============================
+  // Text Search / Find
+  // ==============================
+
+  /**
+   * Find text on the page.
+   * @param {string} text - Text to search for.
+   * @param {object} [options]
+   * @param {boolean} [options.forward=true] - Search direction.
+   * @param {boolean} [options.matchCase=false]
+   * @param {boolean} [options.wordStart=false]
+   * @returns {Promise<{ matches: number, activeMatchOrdinal: number }>}
+   */
+  async findText(text, options = {}) {
+    return new Promise((resolve) => {
+      const requestId = Date.now();
+      const onResult = (_event, result) => {
+        if (result.requestId === requestId && result.finalUpdate) {
+          this._wc.removeListener('found-in-page', onResult);
+          resolve({
+            matches: result.matches || 0,
+            activeMatchOrdinal: result.activeMatchOrdinal || 0,
+          });
+        }
+      };
+      this._wc.on('found-in-page', onResult);
+      this._wc.findInPage(text, {
+        forward: options.forward !== false,
+        matchCase: options.matchCase || false,
+        wordStart: options.wordStart || false,
+        findNext: options.findNext || false,
+      });
+    });
+  }
+
+  /**
+   * Stop find in page and clear highlights.
+   * @param {string} [action='clearSelection'] - 'clearSelection', 'keepSelection', 'activateSelection'
+   */
+  stopFindText(action = 'clearSelection') {
+    this._wc.stopFindInPage(action);
+  }
+
+  // ==============================
+  // Frames / iFrames
+  // ==============================
+
+  /**
+   * Get list of all frames on the page (main + iframes).
+   * @returns {Promise<Array<{ name: string, url: string, id: number }>>}
+   */
+  async getFrames() {
+    return this._wc.executeJavaScript(`
+      (function() {
+        var frames = [{ name: 'main', url: window.location.href, index: 0 }];
+        var iframes = document.querySelectorAll('iframe');
+        for (var i = 0; i < iframes.length; i++) {
+          var f = iframes[i];
+          frames.push({
+            name: f.name || f.id || ('iframe_' + i),
+            url: f.src || '',
+            index: i + 1,
+          });
+        }
+        return frames;
+      })()
+    `, true);
+  }
+
+  /**
+   * Execute JavaScript inside a specific iframe by index or selector.
+   * @param {string|number} frameRef - CSS selector for the iframe or index (0 = main frame).
+   * @param {string} script - JavaScript to execute.
+   */
+  async evaluateInFrame(frameRef, script) {
+    if (frameRef === 0 || frameRef === 'main') {
+      return this.evaluate(script);
+    }
+
+    // Get the frame's webContents via mainFrame hierarchy
+    const allFrames = this._wc.mainFrame.frames;
+    let targetFrame = null;
+
+    if (typeof frameRef === 'number') {
+      // Index-based (1-indexed for iframes, subtract 1)
+      const idx = frameRef - 1;
+      if (idx >= 0 && idx < allFrames.length) {
+        targetFrame = allFrames[idx];
+      }
+    } else {
+      // Selector-based — find by name or url
+      for (const frame of allFrames) {
+        if (frame.name === frameRef || frame.url === frameRef) {
+          targetFrame = frame;
+          break;
+        }
+      }
+    }
+
+    if (!targetFrame) {
+      throw new Error(`Frame not found: ${frameRef}`);
+    }
+    return targetFrame.executeJavaScript(script);
+  }
+
+  /**
+   * Click an element inside an iframe.
+   * @param {string|number} frameRef
+   * @param {string} selector
+   */
+  async clickInFrame(frameRef, selector) {
+    const escaped = selector.replace(/'/g, "\\'");
+    const result = await this.evaluateInFrame(frameRef, `
+      (function() {
+        var el = document.querySelector('${escaped}');
+        if (!el) return null;
+        var r = el.getBoundingClientRect();
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+      })()
+    `);
+    if (!result) throw new Error(`Element not found in frame: ${selector}`);
+
+    // Get iframe offset in main page
+    if (frameRef !== 0 && frameRef !== 'main') {
+      const iframeSelector = typeof frameRef === 'number'
+        ? `iframe:nth-of-type(${frameRef})`
+        : `iframe[name='${frameRef}'], iframe#${frameRef}`;
+      const offset = await this.evaluate(`
+        (function() {
+          var iframe = document.querySelector("${iframeSelector.replace(/"/g, '\\"')}");
+          if (!iframe) return { x: 0, y: 0 };
+          var r = iframe.getBoundingClientRect();
+          return { x: r.x, y: r.y };
+        })()
+      `);
+      await this.mouse.click(
+        Math.round(result.x + (offset ? offset.x : 0)),
+        Math.round(result.y + (offset ? offset.y : 0))
+      );
+    } else {
+      await this.mouse.click(Math.round(result.x), Math.round(result.y));
+    }
+  }
+
+  /**
+   * Type into an element inside an iframe.
+   * @param {string|number} frameRef
+   * @param {string} selector
+   * @param {string} text
+   * @param {number} [delay=0]
+   */
+  async typeInFrame(frameRef, selector, text, delay = 0) {
+    const escaped = selector.replace(/'/g, "\\'");
+    await this.evaluateInFrame(frameRef, `
+      (function() {
+        var el = document.querySelector('${escaped}');
+        if (el) el.focus();
+      })()
+    `);
+    await this.keyboard.type(text, delay);
+  }
+
+  /**
+   * Get the HTML content of an iframe.
+   */
+  async getFrameContent(frameRef) {
+    return this.evaluateInFrame(frameRef, 'document.documentElement.outerHTML');
+  }
+
+  /**
+   * Get text content of an iframe.
+   */
+  async getFrameText(frameRef) {
+    return this.evaluateInFrame(frameRef, 'document.body.innerText');
+  }
+
+  // ==============================
+  // WebRTC IP Handling
+  // ==============================
+
+  /**
+   * Set WebRTC IP handling policy. Critical for privacy / anti-detection.
+   * @param {string} policy - One of:
+   *   'default' - WebRTC uses all available interfaces.
+   *   'default_public_and_private_interfaces' - Use default route + private interfaces.
+   *   'default_public_interface_only' - Only use the default route (no private IPs).
+   *   'disable_non_proxied_udp' - Force through proxy, no direct UDP.
+   */
+  async setWebRTCPolicy(policy) {
+    const validPolicies = [
+      'default',
+      'default_public_and_private_interfaces',
+      'default_public_interface_only',
+      'disable_non_proxied_udp',
+    ];
+    if (!validPolicies.includes(policy)) {
+      throw new Error(`Invalid WebRTC policy: ${policy}. Valid: ${validPolicies.join(', ')}`);
+    }
+    this._wc.setWebRTCIPHandlingPolicy(policy);
+  }
+
+  /**
+   * Get current WebRTC IP handling policy.
+   */
+  getWebRTCPolicy() {
+    return this._wc.getWebRTCIPHandlingPolicy();
+  }
+
+  // ==============================
+  // Permissions
+  // ==============================
+
+  /**
+   * Set permission handler to auto-grant or deny permissions.
+   * @param {object} permissions - Map of permission -> 'grant' | 'deny' | 'prompt'.
+   * Available permissions: 'media', 'geolocation', 'notifications', 'midi',
+   * 'pointerLock', 'fullscreen', 'clipboard-read', 'clipboard-sanitized-write',
+   * 'sensors', 'hid', 'serial', 'usb'
+   */
+  setPermissions(permissions) {
+    this._wc.session.setPermissionRequestHandler((wc, permission, callback) => {
+      if (wc.id !== this._wc.id) {
+        callback(false);
+        return;
+      }
+      const setting = permissions[permission];
+      if (setting === 'grant') {
+        callback(true);
+      } else if (setting === 'deny') {
+        callback(false);
+      } else {
+        // Default: grant
+        callback(true);
+      }
+    });
+
+    // Also handle permission check handler
+    this._wc.session.setPermissionCheckHandler((_wc, permission) => {
+      const setting = permissions[permission];
+      if (setting === 'grant') return true;
+      if (setting === 'deny') return false;
+      return true; // default grant
+    });
+  }
+
+  /**
+   * Grant all permissions (useful for automation).
+   */
+  grantAllPermissions() {
+    this._wc.session.setPermissionRequestHandler((_wc, _permission, callback) => {
+      callback(true);
+    });
+    this._wc.session.setPermissionCheckHandler(() => true);
+  }
+
+  /**
+   * Clear permission handlers (reset to defaults).
+   */
+  clearPermissions() {
+    this._wc.session.setPermissionRequestHandler(null);
+    this._wc.session.setPermissionCheckHandler(null);
+  }
+
+  // ==============================
+  // Popup Handling
+  // ==============================
+
+  /**
+   * Set popup/new window handler.
+   * @param {function} handler - (details) => 'allow' | 'deny' | { action: 'allow'|'deny', url?: string }
+   *   details: { url, frameName, disposition, referrer }
+   *   If handler is null, popups are denied by default.
+   */
+  setPopupHandler(handler) {
+    // Remove old handler
+    if (this._onNewWindow) {
+      this._wc.removeListener('did-create-window', this._onNewWindow);
+      this._onNewWindow = null;
+    }
+
+    this._popupHandler = handler;
+
+    // Use setWindowOpenHandler for intercepting
+    this._wc.setWindowOpenHandler((details) => {
+      if (!this._popupHandler) {
+        return { action: 'deny' };
+      }
+      try {
+        const result = this._popupHandler({
+          url: details.url,
+          frameName: details.frameName || '',
+          disposition: details.disposition,
+          referrer: details.referrer || {},
+        });
+        if (result === 'allow') return { action: 'allow' };
+        if (result === 'deny') return { action: 'deny' };
+        if (result && result.action) return { action: result.action };
+        return { action: 'deny' };
+      } catch {
+        return { action: 'deny' };
+      }
+    });
+  }
+
+  /**
+   * Block all popups.
+   */
+  blockPopups() {
+    this._wc.setWindowOpenHandler(() => ({ action: 'deny' }));
+  }
+
+  /**
+   * Allow all popups.
+   */
+  allowPopups() {
+    this._wc.setWindowOpenHandler(() => ({ action: 'allow' }));
+  }
+
+  // ==============================
+  // Lifecycle
+  // ==============================
 
   destroy() {
     if (this._destroyed) return;
@@ -587,6 +1283,8 @@ class ElectronPage {
 
     // Destroy sub-modules
     this.network.destroy();
+    this.dialogs.destroy();
+    this.downloads.destroy();
     safeDetachDebugger(this._wc);
   }
 }
